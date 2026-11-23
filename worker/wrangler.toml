@@ -12,9 +12,9 @@ DAILY_LIMIT = "40"
 # Daily counter for the limit. Create it with:
 #   npx wrangler kv namespace create USAGE
 # then paste the id it prints below and uncomment.
-# [[kv_namespaces]]
-# binding = "USAGE"
-# id = ""
+[[kv_namespaces]]
+binding = "USAGE"
+id = "d44b581497284a6795e3302d930f186c"
 
 # Secrets (never in this file):
 #   npx wrangler secret put ANTHROPIC_API_KEY
