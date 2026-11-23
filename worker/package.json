@@ -1,0 +1,16 @@
+{
+  "name": "aj-food-log-ai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir dist",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.13.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.167.0"
+  }
+}

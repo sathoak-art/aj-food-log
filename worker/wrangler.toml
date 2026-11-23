@@ -1,0 +1,21 @@
+name = "aj-food-log-ai"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Sites allowed to call this Worker. The GitHub Pages site plus local testing.
+ALLOWED_ORIGINS = "https://sathoak-art.github.io,http://localhost:8765"
+# AI requests per day across all phones (photos, text drafts and label reads).
+DAILY_LIMIT = "40"
+
+# Daily counter for the limit. Create it with:
+#   npx wrangler kv namespace create USAGE
+# then paste the id it prints below and uncomment.
+# [[kv_namespaces]]
+# binding = "USAGE"
+# id = ""
+
+# Secrets (never in this file):
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put APP_PASSCODE

@@ -61,6 +61,16 @@ None of these blocked phase 1. Defaults used:
 - The hot pot meal (`HP`) is a template. Its grams are placeholders.
 - Imported history days have no watch totals, so their balances use the step table and are marked with `*`.
 
-## Next: phase 2 (AI drafts)
+## Phase 2: AI photos and text (needs the Worker)
 
-Add a small Cloudflare Worker that holds the API key and a shared passcode, with rate limits. It exposes `estimate_entry({text, images, context, mode})` and `read_label(image)`. Each returns a draft that loads into the existing entry editor, and nothing saves without a tap. `meal.text`, the saved foods and the current targets are already stored in the shape the system prompt needs.
+- **📷 Photo** on Today: take or pick up to 3 photos and add a note if you want ("ate half", "chicken not beef"). Claude drafts the entry, and you check it and tap Save.
+- **AI from text**, or **✨ Ask AI** under a food search: describe what you ate.
+- **📷 Scan label** on Foods: Claude reads the nutrition panel into a new food. Check the numbers against the photo.
+- **Saved foods are used directly.** If the AI matches one of your saved foods, the app computes it from your own label values.
+- **Questions from the AI** show above the items. Save waits until you tick "Answered".
+- **Background items** the AI saw but didn't count are listed.
+- **Repeated photos:** using the same photo twice is flagged.
+
+Setup: [worker/README.md](worker/README.md). The Worker URL and passcode go in Settings → AI on each phone. The passcode never leaves the device in exports.
+
+**Two people:** each phone keeps its own log. On a second phone, set your own targets and standing rules in Settings. The AI reads them from that phone.

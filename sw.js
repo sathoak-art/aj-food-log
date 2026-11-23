@@ -1,5 +1,5 @@
 /* Offline cache. Bump VERSION on every deploy so phones pick up the new files. */
-const VERSION = 'aj-food-log-v1';
+const VERSION = 'aj-food-log-v2';
 const ASSETS = ['./', 'index.html', 'app.js', 'calc.js', 'seed.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

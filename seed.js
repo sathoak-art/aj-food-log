@@ -155,6 +155,7 @@
       drop_rule_mode: 'alert', drop_rule_lb: 2, drop_rule_add_kcal: 200, flat_lb: 0.3, water_margin_lb: 1, kcal_per_lb: 3500,
       range_label: 0, range_weighed: 10, range_restaurant: 25, range_estimate: 30,
       standing_rules: STANDING_RULES.slice(), dropped_metrics: DROPPED.slice(), glucose_optional: true,
+      ai_url: '', ai_passcode: '',
     };
   }
   function profile() {

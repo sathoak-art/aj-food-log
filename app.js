@@ -141,7 +141,7 @@ function staleBanner() {
 function quickBar(day) {
   const where = day && day.status === 'closed' ? `<div class="tiny muted" style="margin-top:4px">Adds to the closed day ${dayLabel(day.date)}.</div>` : '';
   return `<div class="quick"><form data-form="quick" class="row"><input id="quickIn" class="grow" placeholder="B1, B1 but 160g rice, plan Y1, or a food" autocomplete="off" enterkeyhint="go"><button class="primary">Add</button></form>
-    <div class="row wrap" style="margin-top:6px"><button class="small" data-act="newEntry">+ Food entry</button><button class="small" data-act="newCustom">+ Restaurant / custom</button><button class="small" data-act="mealsSheet">Saved meals</button></div>${where}</div>`;
+    <div class="row wrap" style="margin-top:6px"><label class="btn small primary-soft">📷 Photo<input type="file" accept="image/*" multiple data-chg="mealPhoto" hidden></label><button class="small" data-act="aiText">AI from text</button><button class="small" data-act="newEntry">+ Food entry</button><button class="small" data-act="newCustom">+ Restaurant / custom</button><button class="small" data-act="mealsSheet">Saved meals</button></div>${where}</div>`;
 }
 function viewToday() {
   const day = currentDay();
@@ -332,6 +332,7 @@ SHEETS.entry = () => {
       <label>Confidence<select data-dr="confidence">${CONFS.map(c => `<option ${d.confidence === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
       <label>Range ±%<input inputmode="numeric" data-dr="range_pct" value="${esc(d.range_pct)}"></label></div>
     ${d.source === 'restaurant' ? '<div class="small st-warn">Restaurant: enter the high end of the middle cluster of sources, and keep the range at 25% or more.</div>' : ''}
+    ${aiBox(d)}
     <div>${d.items.map(itemRow).join('')}</div>
     ${hasEgg ? `<label class="check"><input type="checkbox" data-chg="eggOil" ${hasOil ? 'checked' : ''}> Eggs cooked with about ${S.settings.egg_oil_g}g oil (untick if poached, boiled or microwaved dry)</label>` : ''}
     <div class="row"><input id="foodq" class="grow" data-on="foodSearch" data-mode="entry" placeholder="Add a food or meal code…" autocomplete="off"><button data-act="addCustom">Custom</button></div>
@@ -350,7 +351,8 @@ function foodResults(q, mode) {
   const mh = mode === 'entry' ? S.meals.filter(m => words.every(w => (m.code + ' ' + m.name).toLowerCase().includes(w))).slice(0, 4) : [];
   const out = mh.map(m => `<button data-act="pickMeal" data-id="${m.id}"><span class="code">${esc(m.code)}</span> ${esc(m.name)}<div class="d">Saved meal · adds all its items</div></button>`).join('') +
     hits.map(f => `<button data-act="pickFood" data-id="${f.id}">${esc(f.name)}${f.brand ? ` <span class="muted">${esc(f.brand)}</span>` : ''} ${confBadge(f.confidence)}<div class="d">${basisText(f)}: ${fmt(f.kcal)} cal · ${fmt(f.protein, 1)}P · ${fmt(f.fat, 1)}F · ${fmt(f.sodium_mg)} mg Na</div></button>`).join('');
-  return out || `<div class="small muted">No match. <button class="link" data-act="newFoodFromSearch" data-q="${esc(q)}">Save "${esc(q)}" as a new food</button>${mode === 'entry' ? ' or use Custom.' : ''}</div>`;
+  const ask = mode === 'entry' ? `<button data-act="aiFromSearch" data-q="${esc(q)}">✨ Ask AI to estimate "${esc(q)}"<div class="d">Uses your saved foods; you check it before saving</div></button>` : '';
+  return (out || `<div class="small muted">No match. <button class="link" data-act="newFoodFromSearch" data-q="${esc(q)}">Save "${esc(q)}" as a new food</button>${mode === 'entry' ? ' or use Custom.' : ''}</div>`) + ask;
 }
 function findWarnings(d) {
   const w = [];
@@ -363,6 +365,11 @@ function findWarnings(d) {
   if (twice) w.push(`${esc(foodById(twice) ? foodById(twice).name : 'A food')} appears twice in this entry. Raw and cooked weights of the same food?`);
   const blank = d.items.find(i => i.custom && !C.num(i.base_kcal));
   if (blank) w.push('A custom item has no calories.');
+  if (d.photo_hash) {
+    const same = S.entries.find(x => x.id !== d.id && x.status !== 'removed' && x.photo_hash === d.photo_hash);
+    if (same) w.push(`This photo was already used for "${esc(same.label || 'an entry')}"${same.day_id === d.day_id ? ` at ${esc(same.time)}` : ' on another day'}. Same meal twice?`);
+  }
+  if (d.ai && d.ai.questions && d.ai.questions.length && !d._aiAnswered) w.push('The AI asked a question above. Fix the items if the answer changes them, then save.');
   return w;
 }
 async function saveEntry() {
@@ -380,7 +387,7 @@ async function saveEntry() {
   e.range_pct = C.num(e.range_pct);
   if (!e.label) e.label = e.items.slice(0, 2).map(i => i.name).join(' + ') + (e.items.length > 2 ? ' …' : '');
   e.totals = C.sumNutrients(e.items);
-  delete e.assumptions_text; delete e._new; delete e._srcTouched;
+  delete e.assumptions_text; delete e._new; delete e._srcTouched; delete e._aiAnswered;
   if (!e.created_at) e.created_at = new Date().toISOString();
   await save('entries', e);
   const day = dayById(e.day_id);
@@ -566,6 +573,7 @@ function openFood(food, fromSearch) {
   UI.fd = food ? clone(food) : { id: uid('f'), name: '', brand: '', basis: 'per_serving', serving_g: '', serving_label: '', kcal: '', protein: '', fat: '', carbs: '', fiber: '', sodium_mg: '',
     state: 'as_sold', source: 'label', confidence: 'Certain', category: 'label', notes: '', produce: false, egg: false, _new: true };
   UI.fd._fromSearch = !!fromSearch;
+  UI.fdAiImg = null; UI.labelMsg = ''; UI.labelBusy = false;
   openSheet('food');
 }
 SHEETS.food = () => {
@@ -587,8 +595,9 @@ SHEETS.food = () => {
     <label class="check"><input type="checkbox" data-fd="produce" ${f.produce ? 'checked' : ''}> Counts as produce (not potatoes or rice)</label>
     <label class="check"><input type="checkbox" data-fd="egg" ${f.egg ? 'checked' : ''}> Egg (adds about ${S.settings.egg_oil_g}g oil unless poached, boiled or dry)</label>
     <label>Notes<textarea data-fd="notes">${v('notes')}</textarea></label>
-    <label>Label photo<input type="file" accept="image/*" capture="environment" data-chg="labelPhoto"></label>
-    ${f.label_photo ? `<img class="thumb" src="${f.label_photo}" alt="Label photo"><button class="small" data-act="rmPhoto">Remove photo</button>` : ''}
+    <label>Label photo<input type="file" accept="image/*" capture="environment" data-chg="labelPhoto" id="labelPhotoIn"></label>
+    ${f.label_photo ? `<img class="thumb" src="${f.label_photo}" alt="Label photo"><div class="row wrap">${UI.fdAiImg ? `<button class="small primary" data-act="readLabel" ${UI.labelBusy ? 'disabled' : ''}>${UI.labelBusy ? 'Reading…' : '✨ Read label with AI'}</button>` : ''}<button class="small" data-act="rmPhoto">Remove photo</button></div>` : ''}
+    <div id="labelmsg">${UI.labelMsg || ''}</div>
     ${!f._new ? `<label class="check"><input type="checkbox" data-fd="archived" ${f.archived ? 'checked' : ''}> Archived (hidden from search; old entries keep their numbers)</label>` : ''}
     <div id="fderr"></div>
   </div>
@@ -610,13 +619,13 @@ async function saveFood() {
   paintSheet(); if (!UI.stack.length) render();
   toast(`Saved food: ${f.name}`);
 }
-function readImage(file, max) {
+function readImage(file, max, quality) {
   return new Promise((res, rej) => {
     const img = new Image(), url = URL.createObjectURL(file);
     img.onload = () => {
       const sc = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas');
       c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.8));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', quality || 0.8));
     };
     img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Could not read that image.')); };
     img.src = url;
@@ -649,6 +658,135 @@ SHEETS.meal = () => {
   </div>
   <footer class="sheet-f">${!m._new ? '<button class="danger" data-act="deleteMeal">Delete</button>' : '<button data-act="closeSheet">Cancel</button>'}<button class="primary" data-act="saveMeal">Save</button></footer>`;
 };
+
+// ---------- AI drafts (phase 2) ----------
+const b64 = dataUrl => String(dataUrl).replace(/^data:[^,]*,/, '');
+async function sha256(text) {
+  try { const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)); return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32); }
+  catch (e) { return null; }
+}
+async function callAi(path, body) {
+  const s = S.settings;
+  if (!s.ai_url || !s.ai_passcode) throw new Error('AI is not set up. Add the Worker URL and passcode in Settings → AI.');
+  if (navigator.onLine === false) throw new Error('Offline. AI needs a connection; log it manually for now.');
+  let r;
+  try {
+    r = await fetch(s.ai_url.replace(/\/+$/, '') + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-app-passcode': s.ai_passcode }, body: JSON.stringify(body || {}) });
+  } catch (e) { throw new Error('Could not reach the AI Worker. Check the URL and your connection.'); }
+  const j = await r.json().catch(() => ({ error: `Worker answered ${r.status}.` }));
+  if (!r.ok || j.error) throw new Error(j.error || `Worker answered ${r.status}.`);
+  return j;
+}
+function aiContext(day) {
+  const t = targetsFor(day.date), es = dayEntries(day.id), T = C.intakeForDay(es).totals;
+  const r = n => Math.round(n);
+  return {
+    local_time: nowHM(),
+    targets: { kcal_band: [t.kcal_band_low, t.kcal_band_high], protein_floor_g: t.protein_floor_g, fat_cap_g: t.fat_cap_g, carbs_g: t.carbs_g, fiber_g: t.fiber_g, sodium_cap_mg: t.sodium_cap_mg },
+    today_so_far: { kcal: r(T.kcal), protein: r(T.protein), fat: r(T.fat), carbs: r(T.carbs), fiber: r(T.fiber), sodium_mg: r(T.sodium_mg) },
+    entries_today: es.filter(e => e.status !== 'removed').map(e => `${e.time || ''} ${e.status === 'planned' ? '[planned] ' : ''}${e.label}: ${r(C.sumNutrients(e.items).kcal)} cal`),
+    standing_rules: S.settings.standing_rules || [],
+    saved_meals: S.meals.map(m => m.text || mealText(m)),
+    saved_foods: S.foods.filter(f => !f.archived).map(f => [f.id, f.name, f.brand || '', basisText(f), f.state, f.kcal, f.protein, f.fat, f.carbs, f.fiber, f.sodium_mg].join(' | ')),
+  };
+}
+function itemsFromAi(draft) {
+  return (draft.items || []).map(it => {
+    const f = it.food_id ? foodById(it.food_id) : null;
+    if (f && !f.archived && C.num(it.grams) > 0) {
+      const item = C.itemFromFood(f, it.grams, f.id === 'olive_oil' && /egg/i.test(it.name + ' ' + it.notes) ? { eggOil: true, name: 'Cooking oil with eggs' } : null);
+      if (STATES.includes(it.state)) item.state = it.state;
+      if (it.notes) item.ai_note = it.notes;
+      return item;
+    }
+    const c = C.customItem(it.name || 'Item', it, 1);
+    c.grams = C.num(it.grams); c.grams_text = it.grams ? String(Math.round(it.grams)) : '';
+    if (STATES.includes(it.state)) c.state = it.state;
+    if (it.notes) c.ai_note = it.notes;
+    return c;
+  });
+}
+function aiBox(d) {
+  if (!d.ai) return '';
+  const q = d.ai.questions || [], nl = d.ai.not_logged || [];
+  return `<div class="warnbox stack">
+    <div class="small"><b>AI draft</b> <span class="muted">(${esc(d.ai.model || 'Claude')}). Check grams and items, then save. Nothing is logged yet.</span></div>
+    ${q.length ? `<div><b>Questions:</b><ul style="margin:4px 0 0 18px;padding:0">${q.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+      <label class="check small"><input type="checkbox" data-chg="aiAnswered" ${d._aiAnswered ? 'checked' : ''}> Answered: items are right</label></div>` : ''}
+    ${nl.length ? `<div class="small muted">Seen but not counted: ${esc(nl.join('; '))}</div>` : ''}
+  </div>`;
+}
+function openAi(opts) {
+  UI.ai = Object.assign({ images: [], text: '', mode: (UI.ai && UI.ai.mode) || 'log', busy: false, err: '', appendTo: null }, opts);
+  openSheet('ai');
+  setTimeout(() => { const t = document.querySelector('[data-ai="text"]'); if (t && !UI.ai.images.length) t.focus(); }, 50);
+}
+SHEETS.ai = () => {
+  const a = UI.ai;
+  return `${sheetHead(a.images.length ? 'Estimate from photo' : 'Estimate from text')}
+  <div class="stack">
+    ${a.images.length ? `<div class="row wrap">${a.images.map((src, i) => `<div style="position:relative"><img class="thumb" style="max-height:150px" src="${src}" alt="Photo ${i + 1}"><button class="icon" style="position:absolute;top:2px;right:2px;background:var(--bg)" data-act="rmAiImg" data-i="${i}" aria-label="Remove photo">✕</button></div>`).join('')}</div>` : ''}
+    <label>${a.images.length ? 'Anything the photo can’t show? (optional)' : 'What did you eat?'}<textarea data-ai="text" placeholder="${a.images.length ? 'e.g. ate half, chicken not beef, 1 tbsp oil, from Tim Hortons' : 'e.g. half a beef donair from Jimmy’s, 2 eggs + 150g rice'}">${esc(a.text)}</textarea></label>
+    <div class="seg">${['log', 'plan'].map(m => `<button data-act="aiMode" data-v="${m}" class="${a.mode === m ? 'on' + (m === 'plan' ? ' plan' : '') : ''}">${m === 'log' ? 'I ate it' : 'Planning (not counted)'}</button>`).join('')}</div>
+    <div class="tiny muted">${a.images.length ? 'Photo goes to Claude Sonnet 5.5 through your Worker.' : 'Text goes to Claude Haiku 5.5 through your Worker.'} You review the draft before anything is saved.</div>
+    <div id="aierr">${a.err ? `<div class="err">${esc(a.err)}</div>` : ''}</div>
+  </div>
+  <footer class="sheet-f"><button data-act="closeSheet">Cancel</button><button class="primary" data-act="runAi" ${a.busy ? 'disabled' : ''}>${a.busy ? 'Estimating…' : 'Estimate'}</button></footer>`;
+};
+async function runAi() {
+  const a = UI.ai;
+  if (a.busy) return;
+  if (!a.images.length && !a.text.trim()) { a.err = 'Describe the food or add a photo.'; paintSheet(); return; }
+  a.busy = true; a.err = ''; paintSheet();
+  try {
+    const day = a.appendTo ? dayById(a.appendTo.day_id) : await ensureOpenDay();
+    const res = await callAi('/estimate', {
+      text: a.text, mode: a.mode, context: aiContext(day),
+      images: a.images.map(src => ({ media_type: 'image/jpeg', data: b64(src) })),
+    });
+    const dr = res.draft || {};
+    const items = itemsFromAi(dr);
+    if (!items.length) throw new Error((dr.questions && dr.questions[0]) || 'The AI found nothing to log in that. Try a clearer photo or add a note.');
+    const ai = { questions: dr.questions || [], not_logged: dr.not_logged || [], model: res.model };
+    const hash = a.images.length ? await sha256(a.images.map(b64).join('|')) : null;
+    const assumptions = (dr.assumptions || []).concat(items.filter(i => i.ai_note).map(i => `${i.name}: ${i.ai_note}`));
+    a.busy = false;
+    if (a.appendTo && UI.draft === a.appendTo) {
+      const d = UI.draft;
+      d.items.push(...items); d.ai = ai; d._aiAnswered = false;
+      d.assumptions_text = [d.assumptions_text != null ? d.assumptions_text : (d.assumptions || []).join('\n'), ...assumptions].filter(Boolean).join('\n');
+      if (!d.label) d.label = dr.label || '';
+      if (!d._srcTouched) { d.source = SOURCES.includes(dr.source) ? dr.source : 'estimate'; d.confidence = CONFS.includes(dr.confidence) ? dr.confidence : 'Uncertain'; d.range_pct = C.num(dr.range_pct); }
+      UI.stack.pop(); paintSheet();
+      return;
+    }
+    const d = newEntryDraft(day, {
+      status: a.mode === 'plan' ? 'planned' : 'logged', label: dr.label || 'AI estimate', items,
+      source: SOURCES.includes(dr.source) ? dr.source : 'estimate', confidence: CONFS.includes(dr.confidence) ? dr.confidence : 'Uncertain',
+      range_pct: C.num(dr.range_pct), assumptions, ai, photo_hash: hash, ai_text: a.text || undefined, _srcTouched: true,
+    });
+    UI.stack = []; openEntry(d);
+  } catch (e) {
+    a.busy = false; a.err = e.message || String(e); paintSheet();
+  }
+}
+async function readLabel() {
+  if (!UI.fdAiImg || UI.labelBusy) return;
+  UI.labelBusy = true; UI.labelMsg = ''; paintSheet();
+  try {
+    const res = await callAi('/label', { images: [{ media_type: 'image/jpeg', data: b64(UI.fdAiImg) }] });
+    const L = res.label || {}, f = UI.fd;
+    if (!f.name && L.product_name) f.name = L.product_name;
+    if (!f.brand && L.brand) f.brand = L.brand;
+    Object.assign(f, { basis: 'per_serving', serving_g: L.serving_g || '', serving_label: L.serving_label || '', kcal: L.kcal, protein: L.protein, fat: L.fat, carbs: L.carbs, fiber: L.fiber, sodium_mg: L.sodium_mg, source: 'label', confidence: 'Certain', category: f.category === 'staple' ? 'label' : f.category || 'label' });
+    const unread = (L.unreadable || []).filter(Boolean);
+    if (unread.length || L.notes) f.notes = [f.notes, unread.length ? `Unclear on the photo: ${unread.join(', ')}.` : '', L.notes].filter(Boolean).join(' ');
+    UI.labelMsg = `<div class="warnbox">Read by AI. <b>Check every number against the photo</b>; glare and blur hide digits.${unread.length ? ` <span class="st-warn">Unclear: ${esc(unread.join(', '))}.</span>` : ''}</div>`;
+  } catch (e) {
+    UI.labelMsg = `<div class="err">${esc(e.message || String(e))}</div>`;
+  }
+  UI.labelBusy = false; paintSheet();
+}
 
 // ---------- Week ----------
 function weekStats(ws) {
@@ -770,7 +908,7 @@ function foodListHtml() {
     <div class="d">${basisText(f)}${f.state !== 'as_sold' ? ', ' + STATE_L[f.state].toLowerCase() : ''}: ${fmt(f.kcal)} cal · ${fmt(f.protein, 1)}P · ${fmt(f.fat, 1)}F · ${fmt(f.carbs, 1)}C · ${fmt(f.fiber, 1)} fib · ${fmt(f.sodium_mg)} Na${f.label_photo ? ' · photo' : ''}</div></li>`).join('');
 }
 function viewFoods() {
-  return `<div class="row spread"><h1>Foods</h1><button class="primary small" data-act="newFood">+ Food</button></div>
+  return `<div class="row spread"><h1>Foods</h1><div class="row"><button class="small" data-act="scanLabel">📷 Scan label</button><button class="primary small" data-act="newFood">+ Food</button></div></div>
   <div class="quick"><input data-on="foodsFilter" placeholder="Search foods" value="${esc(UI.foodsQ)}" autocomplete="off"></div>
   <div class="chips">${CATS.map(([k, l]) => `<button class="small ${UI.foodsCat === k ? 'on' : ''}" data-act="foodsCat" data-v="${k}">${l}</button>`).join('')}</div>
   <div class="card"><ul class="list" id="foodlist">${foodListHtml()}</ul></div>`;
@@ -826,6 +964,13 @@ function viewSettings() {
       <label>Cut started<input type="date" data-set="cut_start" data-kind="text" value="${esc(s.cut_start)}"></label><label>Units<input value="lb, grams" disabled></label></div>
     <div class="small muted">Timezone: ${esc(deviceTz() || 'unknown')} (from this device, never hardcoded).</div>
   </div>
+  <div class="card stack"><h2>AI (photos and text)</h2>
+    <div class="small muted">Talks to your own Cloudflare Worker, which holds the Anthropic key. Photos and labels use Claude Sonnet 5.5; text uses Claude Haiku 5.5. Drafts never save without your tap. Needs a connection.</div>
+    <label>Worker URL<input data-set="ai_url" data-kind="text" value="${esc(s.ai_url || '')}" placeholder="https://aj-food-log-ai.yourname.workers.dev" autocomplete="off" inputmode="url"></label>
+    <label>Passcode<input type="password" data-set="ai_passcode" data-kind="text" value="${esc(s.ai_passcode || '')}" autocomplete="off"></label>
+    <div class="row wrap"><button data-act="testAi">Test connection</button><span id="aitest" class="small"></span></div>
+    <div class="tiny muted">The passcode stays on this device and is left out of exports.</div>
+  </div>
   <div class="card stack"><h2>Data</h2>
     <div class="small muted">Everything lives on this device. Export regularly; a cleared browser loses it.</div>
     <div class="row wrap"><button data-act="exportData">Export JSON</button><label class="small" style="display:inline-flex"><span class="muted">Import JSON</span><input type="file" accept="application/json,.json" data-chg="importData"></label></div>
@@ -880,6 +1025,7 @@ async function loadHistory(file) {
 function exportData() {
   const data = {};
   STORES.forEach(s => { data[s] = SINGLE[s] ? (S[s] ? [S[s]] : []) : S[s]; });
+  if (data.settings[0]) { data.settings = [Object.assign({}, data.settings[0])]; delete data.settings[0].ai_passcode; }
   const blob = new Blob([JSON.stringify({ app: 'aj-food-log', version: 1, exported_at: new Date().toISOString(), data })], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `aj-food-log-${C.isoLocal()}.json`;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -973,7 +1119,19 @@ const A = {
   newFood: () => openFood(null),
   editFood: el => openFood(foodById(el.dataset.id)),
   saveFood: () => saveFood(),
-  rmPhoto: () => { delete UI.fd.label_photo; paintSheet(); },
+  rmPhoto: () => { delete UI.fd.label_photo; UI.fdAiImg = null; UI.labelMsg = ''; paintSheet(); },
+  aiText: () => openAi({}),
+  aiFromSearch: el => openAi({ text: el.dataset.q || '', appendTo: UI.draft, mode: UI.draft && UI.draft.status === 'planned' ? 'plan' : 'log' }),
+  aiMode: el => { UI.ai.mode = el.dataset.v; paintSheet(); },
+  rmAiImg: el => { UI.ai.images.splice(+el.dataset.i, 1); paintSheet(); },
+  runAi: () => runAi(),
+  readLabel: () => readLabel(),
+  scanLabel: () => { openFood(null); UI.fd._autoRead = true; const i = $('#labelPhotoIn'); if (i) i.click(); },
+  testAi: async () => {
+    const out = $('#aitest'); out.textContent = 'Testing…'; out.className = 'small muted';
+    try { const r = await callAi('/ping', {}); out.textContent = `Connected. ${r.used_today != null ? `${r.used_today} of ${r.daily_limit} AI requests used today.` : ''}`; out.className = 'small st-good'; }
+    catch (e) { out.textContent = e.message; out.className = 'small st-over'; }
+  },
   foodVersion: async () => {
     const old = foodById(UI.fd.id); if (!old) return;
     old.archived = true; old.notes = [old.notes, `Archived ${C.ddmm(C.isoLocal())}: replaced by a new version.`].filter(Boolean).join(' ');
@@ -1018,7 +1176,20 @@ const CHG = {
     if (!el.checked) d.items = d.items.filter(i => !i.eggOil);
     paintSheet();
   },
-  labelPhoto: async el => { const f = el.files && el.files[0]; if (!f) return; try { UI.fd.label_photo = await readImage(f, 1000); paintSheet(); } catch (e) { toast(e.message, true); } },
+  labelPhoto: async el => {
+    const f = el.files && el.files[0]; if (!f) return;
+    try { UI.fd.label_photo = await readImage(f, 1000); UI.fdAiImg = await readImage(f, 1600, 0.9); UI.labelMsg = ''; paintSheet(); if (UI.fd._autoRead) { UI.fd._autoRead = false; A.readLabel(); } }
+    catch (e) { toast(e.message, true); }
+  },
+  aiAnswered: el => { if (UI.draft) UI.draft._aiAnswered = el.checked; },
+  mealPhoto: async el => {
+    const files = [...(el.files || [])].slice(0, 3); el.value = ''; if (!files.length) return;
+    try {
+      const imgs = [];
+      for (const f of files) imgs.push(await readImage(f, 1500, 0.85));
+      openAi({ images: imgs });
+    } catch (e) { toast(e.message, true); }
+  },
   historyFile: el => { const f = el.files && el.files[0]; if (f) loadHistory(f); el.value = ''; },
   importData: el => { const f = el.files && el.files[0]; if (f) importData(f); el.value = ''; },
 };
@@ -1069,6 +1240,7 @@ function onField(el, isChange) {
     return;
   }
   if (ds.cl != null && UI.cl) { UI.cl[ds.cl] = el.value; return; }
+  if (ds.ai != null && UI.ai) { UI.ai[ds.ai] = el.value; return; }
   if (ds.de != null && UI.de) { UI.de[ds.de] = el.value; return; }
   if (ds.tg != null && UI.tg) { UI.tg[ds.tg] = el.value; return; }
   if (!isChange) return;
